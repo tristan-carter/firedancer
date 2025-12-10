@@ -43,8 +43,6 @@ fd_xsk_mmap_ring( fd_xdp_ring_t * ring,
                   ulong           depth,
                   struct xdp_ring_offset const * ring_offset ) {
   /* TODO what is ring_offset->desc ? */
-  /* TODO: mmap was originally called with MAP_POPULATE,
-           but this symbol isn't available with this build */
 
   /* sanity check */
   if( depth > (ulong)UINT_MAX ) {
@@ -58,6 +56,13 @@ fd_xsk_mmap_ring( fd_xdp_ring_t * ring,
     FD_LOG_WARNING(( "mmap(NULL, %lu, PROT_READ|PROT_WRITE, MAP_SHARED, xsk_fd, %s) failed (%i-%s)",
                      map_sz, fd_xsk_mmap_offset_cstr( map_off ), errno, fd_io_strerror( errno ) ));
     return -1;
+  }
+
+  /* Manual page pre-faulting  */
+  long page_sz = sysconf(_SC_PAGESIZE);
+  volatile uchar * res_p = (volatile uchar *)res;
+  for( ulong i = 0; i < map_sz; i += page_sz ) {
+      res_p[i] = 0;
   }
 
   /* TODO add unit test asserting that cached prod/cons seq gets
