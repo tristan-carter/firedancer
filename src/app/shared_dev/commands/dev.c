@@ -51,10 +51,9 @@ dev_cmd_perm( args_t *         args,
   run_cmd_perm( NULL, chk, config );
 
   /* for dev Firedancer uses a single VA space so mlock_limit
-     needs to be expanded to the sum of every tiles' memory */ 
-  ulong mlock_limit = fd_topo_mlock( &config->topo );
-
-  fd_cap_chk_raise_rlimit(chk, "dev", RLIMIT_MEMLOCK, mlock_limit, "call `rlimit(2)` to increase `RLIMIT_MEMLOCK` so all memory can be locked with `mlock(2)`" );
+     needs to be expanded, fd_topo_mlock underestimates the 
+     required amount here so mlock_limit must be set to infinity */ 
+  fd_cap_chk_raise_rlimit(chk, "dev", RLIMIT_MEMLOCK, RLIM_INFINITY, "call `rlimit(2)` to increase `RLIMIT_MEMLOCK` so all memory can be locked with `mlock(2)`" );
 }
 
 pid_t firedancer_pid, watch_pid;
