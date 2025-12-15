@@ -6,6 +6,7 @@
 #include "../../shared/commands/watch/watch.h"
 #include "../../../discof/genesis/genesis_hash.h"
 #include "../../../disco/net/fd_net_tile.h"
+#include "../../../disco/topo/fd_topo.h"
 
 #include <stdio.h>
 #include <stdlib.h> /* setenv */
@@ -14,6 +15,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 
 fd_topo_run_tile_t
 fdctl_tile_run( fd_topo_tile_t const * tile );
@@ -47,6 +49,12 @@ dev_cmd_perm( args_t *         args,
   }
 
   run_cmd_perm( NULL, chk, config );
+
+  /* for dev Firedancer uses a single VA space so mlock_limit
+     needs to be expanded to the sum of every tiles' memory */ 
+  ulong mlock_limit = fd_topo_mlock( &config->topo );
+
+  fd_cap_chk_raise_rlimit(chk, "dev", RLIMIT_MEMLOCK, mlock_limit, "call `rlimit(2)` to increase `RLIMIT_MEMLOCK` so all memory can be locked with `mlock(2)`" );
 }
 
 pid_t firedancer_pid, watch_pid;
