@@ -217,6 +217,9 @@ struct fd_xsk_params {
   /* sockaddr_xdp.sxdp_flags additional params, e.g. XDP_ZEROCOPY */
   uint bind_flags;
 
+  /* busy_poll_usecs: max time elapsed polling during poll(2) call. */
+  uint busy_poll_usecs;
+
   /* whether the xsk memory should be included in core dumps */
   int core_dump;
 };
@@ -235,6 +238,12 @@ struct fd_xsk {
 
   /* AF_XDP socket file descriptor */
   int xsk_fd;
+
+  /* poll_mode: "pref_busy", "busy", or "softirq" */
+  char poll_mode[ 16 ];
+
+  /* napi_id: ID of NAPI instance */
+  uint napi_id;
 
   /* ring_{rx,tx,fr,cr}: XSK ring descriptors */
 

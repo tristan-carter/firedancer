@@ -964,6 +964,13 @@ user = ""
         # "operation not supported".
         xdp_zero_copy = false
 
+        # TODO: improve explanations for these default values, will
+        # do before merging prefer busy polling PR. 10ms is currently
+        # just a magic number which seems resonable, will set properly prior
+        # to merging PR too.
+        poll_mode         = "pref_busy"
+        sk_ll_usec_micros = 10000
+
         # XDP uses metadata queues shared across the kernel and
         # userspace to relay events about incoming and outgoing packets.
         # This setting defines the number of entries in these metadata

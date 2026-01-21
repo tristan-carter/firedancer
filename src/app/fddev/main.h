@@ -34,6 +34,7 @@ extern configure_stage_t fd_cfg_stage_netns;
 extern configure_stage_t fd_cfg_stage_genesis;
 extern configure_stage_t fd_cfg_stage_keys;
 extern configure_stage_t fd_cfg_stage_blockstore;
+extern configure_stage_t fd_cfg_stage_sysfs_poll;
 
 configure_stage_t * STAGES[] = {
   &fd_cfg_stage_kill,
@@ -48,6 +49,7 @@ configure_stage_t * STAGES[] = {
   &fd_cfg_stage_keys,
   &fd_cfg_stage_genesis,
   &fd_cfg_stage_blockstore,
+  &fd_cfg_stage_sysfs_poll,
   NULL,
 };
 

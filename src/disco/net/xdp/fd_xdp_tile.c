@@ -212,6 +212,8 @@ typedef struct {
   ushort repair_intake_listen_port;
   ushort repair_serve_listen_port;
   ushort send_src_port;
+  uint   pref_busy_poll;
+  uint   sk_ll_usec_micros;
 
   ulong in_cnt;
   fd_net_in_ctx_t in[ MAX_NET_INS ];
@@ -474,10 +476,21 @@ net_tx_periodic_wakeup( fd_net_ctx_t * ctx,
                         uint           xsk_idx,
                         long           now,
                         int *          charge_busy ) {
-  fd_xdp_ring_t * tx_ring        = &ctx->xsk[ xsk_idx ].ring_tx;
+  fd_xsk_t *      xsk            = &ctx->xsk[ xsk_idx ];
+  fd_xdp_ring_t * tx_ring        = &xsk->ring_tx;
   int             tx_ring_empty  = fd_xdp_ring_empty( tx_ring, FD_XDP_RING_ROLE_PROD );
+  if( FD_LIKELY( ctx->pref_busy_poll ) ) {
+      if( fd_xsk_tx_need_wakeup( xsk ) ) {
+          net_tx_wakeup( ctx, xsk, charge_busy );
+          fd_net_flusher_wakeup( ctx->tx_flusher+xsk_idx, now );
+          return 1;
+      }
+      return 0;
+  }
+
+  /* timer based batching for softirq fallback mode */
   if( fd_net_flusher_check( ctx->tx_flusher+xsk_idx, now, tx_ring_empty ) ) {
-    net_tx_wakeup( ctx, &ctx->xsk[ xsk_idx ], charge_busy );
+    net_tx_wakeup( ctx, xsk, charge_busy );
     fd_net_flusher_wakeup( ctx->tx_flusher+xsk_idx, now );
   }
   return 0;
@@ -1293,6 +1306,10 @@ privileged_init( fd_topo_t *      topo,
     .core_dump = tile->xdp.xsk_core_dump,
   };
 
+  if( !strcmp( tile->xdp.poll_mode, "pref_busy" ) ) {
+      params0.busy_poll_usecs = tile->xdp.sk_ll_usec_micros;
+  }
+
   /* Re-derive XDP file descriptors */
 
   fd_xdp_fds_t xdp_fds[ FD_TOPO_XDP_FDS_MAX ];
@@ -1414,6 +1431,8 @@ unprivileged_init( fd_topo_t *      topo,
   ctx->repair_intake_listen_port      = tile->net.repair_intake_listen_port;
   ctx->repair_serve_listen_port       = tile->net.repair_serve_listen_port;
   ctx->send_src_port                  = tile->net.send_src_port;
+  ctx->pref_busy_poll                 = !strcmp( tile->xdp.poll_mode, "pref_busy" );
+  ctx->sk_ll_usec_micros              = tile->xdp.sk_ll_usec_micros;
 
   /* Put a bound on chunks we read from the input, to make sure they
      are within in the data region of the workspace. */
