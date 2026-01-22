@@ -80,7 +80,7 @@ check( config_t const * config,
     CONFIGURE_OK();
 }
 
-configure_stage_t fd_cfg_sysfs_poll = {
+configure_stage_t fd_cfg_stage_sysfs_poll = {
     .name      = NAME,
     .enabled   = enabled,
     .init_perm = init_perm,
