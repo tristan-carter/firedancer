@@ -271,15 +271,15 @@ fd_xsk_init( fd_xsk_t *              xsk,
       return NULL;
     }
 
-    if( FD_UNLIKELY( 0!=setsockopt( xsk->xsk_fd, SOL_SOCKET, SO_BUSY_POLL, &params->busy_poll_usecs, sizeof(ulong) ) ) ) {
-      FD_LOG_WARNING(( "setsockopt(xsk_fd,SOL_SOCKET,SO_BUSY_POLL,%lu) failed (%i-%s)",
+    if( FD_UNLIKELY( 0!=setsockopt( xsk->xsk_fd, SOL_SOCKET, SO_BUSY_POLL, &params->busy_poll_usecs, sizeof(uint) ) ) ) {
+      FD_LOG_WARNING(( "setsockopt(xsk_fd,SOL_SOCKET,SO_BUSY_POLL,%u) failed (%i-%s)",
                        params->busy_poll_usecs, errno, fd_io_strerror( errno ) ));
       return NULL;
     }
 
-    ulong busy_poll_budget = fd_ulong_min( fd_ulong_min( params->fr_depth, params->rx_depth ), fd_ulong_min( params->tx_depth, params->cr_depth ) );
-    if( FD_UNLIKELY( 0!=setsockopt( xsk->xsk_fd, SOL_SOCKET, SO_BUSY_POLL_BUDGET, &busy_poll_budget, sizeof(ulong) ) ) ) {
-      FD_LOG_WARNING(( "setsockopt(xsk_fd,SOL_SOCKET,SO_BUSY_POLL_BUDGET,%lu) failed (%i-%s)",
+    uint busy_poll_budget = (uint)fd_ulong_min( fd_ulong_min( params->fr_depth, params->rx_depth ), fd_ulong_min( params->tx_depth, params->cr_depth ) );
+    if( FD_UNLIKELY( 0!=setsockopt( xsk->xsk_fd, SOL_SOCKET, SO_BUSY_POLL_BUDGET, &busy_poll_budget, sizeof(uint) ) ) ) {
+      FD_LOG_WARNING(( "setsockopt(xsk_fd,SOL_SOCKET,SO_BUSY_POLL_BUDGET,%u) failed (%i-%s)",
                        busy_poll_budget, errno, fd_io_strerror( errno ) ));
       return NULL;
     }
