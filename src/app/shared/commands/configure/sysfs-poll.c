@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <unistd.h> /* access */
 #include <linux/capability.h>
 
 #define VERY_HIGH_VAL 1000000000U
@@ -72,9 +73,15 @@ check( config_t const * config,
         NOT_CONFIGURED("Setting gro_flush_timeout failed.");
     }
     
+    /* irq_suspend_timeout was released in Linux 6.13, therefore due to
+       how new irq_suspend_timeout is many validators won't have it as
+       an available system configuration. */
     fd_cstr_printf_check( path, PATH_MAX, NULL, "/sys/class/net/%s/%s", config->net.interface, setting_irq_suspend_timeout );
-    if( fd_file_util_read_uint( path, &value ) || value != VERY_HIGH_VAL ) {
-        NOT_CONFIGURED("Setting irq_suspend_timeout failed.");
+
+    if( access( path, F_OK ) != -1 ) {
+        if( fd_file_util_read_uint( path, &value ) || value != VERY_HIGH_VAL ) {
+            NOT_CONFIGURED("Setting irq_suspend_timeout failed.");
+        }
     }
 
     CONFIGURE_OK();
