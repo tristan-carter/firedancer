@@ -21,13 +21,13 @@ static char const setting_gro_flush_timeout[] = "gro_flush_timeout";
 static char const setting_irq_suspend_timeout[] = "irq_suspend_timeout";
 
 static int
-enabled( config_t * config ) {
+enabled( config_t const * config ) {
     return !strcmp( config->net.xdp.poll_mode, "pref_busy" );
 }
 
 static void
 init_perm ( fd_cap_chk_t   * chk,
-            config_t const * FD_PARAM_UNUSED ) {
+            config_t const * config FD_PARAM_UNUSED ) {
     fd_cap_chk_cap( chk, NAME, CAP_NET_ADMIN, "configure preferred busy polling via `/sys/class/net/*/{napi_defer_hard_irqs, gro_flush_timeout, irq_suspend_timeout}`" );
 }
 
@@ -48,31 +48,32 @@ init( config_t const * config ) {
     sysfs_net_set( config->net.interface, setting_irq_suspend_timeout,  VERY_HIGH_VAL );
 }
 
-static void
+static int
 fini( config_t const * config,
       int              pre_init FD_PARAM_UNUSED ) {
     sysfs_net_set( config->net.interface, setting_napi_defer_hard_irqs, 0U );
     sysfs_net_set( config->net.interface, setting_gro_flush_timeout,    0U );
     sysfs_net_set( config->net.interface, setting_irq_suspend_timeout,  0U );
+    return 1;
 }
 
 static configure_result_t
-check( config_t const * config ) {
-    static char const enoent_msg[] = "Interface not found or XDP preferred busy polling not supported:";
-
+check( config_t const * config,
+       int              check_type FD_PARAM_UNUSED ) {
     char path[ PATH_MAX ];
+    uint value;
     fd_cstr_printf_check( path, PATH_MAX, NULL, "/sys/class/net/%s/%s", config->net.interface, setting_napi_defer_hard_irqs );
-    if( fd_file_util_read_uint( path, enoent_msg ) != VERY_HIGH_VAL ) {
+    if( fd_file_util_read_uint( path, &value ) || value != VERY_HIGH_VAL ) {
         NOT_CONFIGURED("Setting napi_defer_hard_irqs failed.");
     }
 
     fd_cstr_printf_check( path, PATH_MAX, NULL, "/sys/class/net/%s/%s", config->net.interface, setting_gro_flush_timeout );
-    if( fd_file_util_read_uint( path, enoent_msg ) != VERY_HIGH_VAL ) {
+    if( fd_file_util_read_uint( path, &value ) || value != VERY_HIGH_VAL ) {
         NOT_CONFIGURED("Setting gro_flush_timeout failed.");
     }
     
     fd_cstr_printf_check( path, PATH_MAX, NULL, "/sys/class/net/%s/%s", config->net.interface, setting_irq_suspend_timeout );
-    if( fd_file_util_read_uint( path, enoent_msg ) != VERY_HIGH_VAL ) {
+    if( fd_file_util_read_uint( path, &value ) || value != VERY_HIGH_VAL ) {
         NOT_CONFIGURED("Setting irq_suspend_timeout failed.");
     }
 
