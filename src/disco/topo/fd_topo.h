@@ -182,8 +182,9 @@ struct fd_topo_tile {
       long   tx_flush_timeout_ns;
       char   xdp_mode[8];
       int    zero_copy;
-      char   poll_mode[ 16 ]; /* "pref_busy", "busy", or "softirq" */
-      uint    sk_ll_usec_micros;
+      char   poll_mode[ 16 ]; /* "pref_busy" or "softirq" */
+      uint   busy_poll_usecs;
+      ulong  gro_flush_timeout_nanos;
 
       ulong netdev_dbl_buf_obj_id; /* dbl_buf containing netdev_tbl */
       ulong fib4_main_obj_id;      /* fib4 containing main route table */

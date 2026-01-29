@@ -185,10 +185,11 @@ struct fd_config_net {
   uint ingress_buffer_size;
 
   struct {
-    char xdp_mode[ 8 ];
-    int  xdp_zero_copy;
-    char poll_mode[ 16 ]; /* "pref_busy", "busy", or "softirq" */
-    uint  sk_ll_usec_micros;
+    char  xdp_mode[ 8 ];
+    int   xdp_zero_copy;
+    char  poll_mode[ 16 ]; /* "prefbusy", or "softirq" */
+    uint  busy_poll_usecs;
+    ulong gro_flush_timeout_nanos;
 
     uint xdp_rx_queue_size;
     uint xdp_tx_queue_size;

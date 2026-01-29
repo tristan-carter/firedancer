@@ -477,10 +477,21 @@ net_tx_periodic_wakeup( fd_net_ctx_t * ctx,
                         uint           xsk_idx,
                         long           now,
                         int *          charge_busy ) {
-  fd_xdp_ring_t * tx_ring        = &ctx->xsk[ xsk_idx ].ring_tx;
+  fd_xsk_t *      xsk            = &ctx->xsk[ xsk_idx ];
+  fd_xdp_ring_t * tx_ring        = &xsk->ring_tx;
   int             tx_ring_empty  = fd_xdp_ring_empty( tx_ring, FD_XDP_RING_ROLE_PROD );
+  if( FD_LIKELY( ctx->pref_busy_poll ) ) {
+      if( fd_xsk_tx_need_wakeup( xsk ) ) {
+          net_tx_wakeup( ctx, xsk, charge_busy );
+          fd_net_flusher_wakeup( ctx->tx_flusher+xsk_idx, now );
+          return 1;
+      }
+      return 0;
+  }
+
+  /* timer based batching for softirq fallback mode */
   if( fd_net_flusher_check( ctx->tx_flusher+xsk_idx, now, tx_ring_empty ) ) {
-    net_tx_wakeup( ctx, &ctx->xsk[ xsk_idx ], charge_busy );
+    net_tx_wakeup( ctx, xsk, charge_busy );
     fd_net_flusher_wakeup( ctx->tx_flusher+xsk_idx, now );
   }
   return 0;
@@ -1118,84 +1129,6 @@ net_rx_event( fd_net_ctx_t * ctx,
   fill_ring->cached_prod = fill_prod+1U;
 }
 
-/* before_credit_softirq is called every loop iteration if net tile
-   is in softirq polling mode (fallback if prefbusy polling mode
-   is not possible). */
-
-static void
-before_credit_softirq( fd_net_ctx_t *      ctx,
-                       fd_stem_context_t * stem,
-                       int *               charge_busy,
-                       uint                rr_idx,
-                       fd_xsk_t *          rr_xsk ) {
-
-  net_tx_periodic_wakeup( ctx, rr_idx, fd_tickcount(), charge_busy );
-
-  /* Fire RX event if we have RX desc avail */
-  if( !fd_xdp_ring_empty( &rr_xsk->ring_rx, FD_XDP_RING_ROLE_CONS ) ) {
-    *charge_busy = 1;
-    net_rx_event( ctx, rr_xsk, rr_xsk->ring_rx.cached_cons );
-  } else {
-    net_rx_wakeup( ctx, rr_xsk, charge_busy );
-    ctx->rr_idx++;
-    ctx->rr_idx = fd_uint_if( ctx->rr_idx>=ctx->xsk_cnt, 0, ctx->rr_idx );
-  }
-}
-
-/* before_credit_prefbusy is called every loop iteration if net
-   tile is in preferred busy (often referred to as prefbusy in
-   Firedancer) polling mode. */
-
-static void
-before_credit_prefbusy( fd_net_ctx_t *      ctx,
-                        fd_stem_context_t * stem,
-                        int *               charge_busy,
-                        uint                rr_idx,
-                        fd_xsk_t *          rr_xsk ) {
-
-  if( FD_UNLIKELY( fd_xdp_ring_empty( &rr_xsk->ring_rx, FD_XDP_RING_ROLE_CONS )
-                || fd_xdp_ring_full( &rr_xsk->ring_tx, FD_XDP_RING_ROLE_CONS ) ) {
-    /* Kernel needs to be kicked to process new TX from
-       Firedancer's net tile and process new RX from the NIC.
-       Note epoll processes both RX and TX. */
-
-    fd_epoll_event_t event;
-    if( FD_UNLIKELY( -1==epoll_wait( rr_xsk->epoll_fd, &event, 1, 0 ) ) ) {
-      if( FD_UNLIKELY( net_is_fatal_xdp_error( errno ) ) ) {
-        FD_LOG_ERR(( "xsk epoll_wait failed xsk_fd=%d, epoll_fd=%d (%i-%s)",
-                     rr_xsk->xsk_fd, rr_xsk->epoll_fd, errno, fd_io_strerror( errno ) ));
-      }
-      if( FD_UNLIKELY( errno!=EAGAIN ) ) {
-        long ts = fd_log_wallclock();
-        if( ts > rr_xsk->log_suppress_until_ns ) {
-          FD_LOG_WARNING(( "xsk epoll_wait failed xsk_fd=%d, epoll_fd=%d (%i-%s)",
-                           rr_xsk->xsk_fd, rr_xsk->epoll_fd, errno, fd_io_strerror( errno ) ));
-          rr_xsk->log_suppress_until_ns = ts + (long)1e9;
-        }
-      }
-    }
-
-    fd_net_flusher_wakeup( ctx->tx_flusher+rr_idx, fd_tickcount() );
-
-    /* Since epoll handles both rx and tx both are incremented */
-    ctx->metrics.xsk_tx_wakeup_cnt++;
-    ctx->metrics.xsk_rx_wakeup_cnt++;
-  }
-
-  /* Process new TX from Firedancer. */
-
-  /* Process new RX from kernel driver if there is any, if there
-     isn't then iterate onto the next napi queue. */
-  if( !fd_xdp_ring_empty( &rr_xsk->ring_rx, FD_XDP_RING_ROLE_CONS ) ) {
-    *charge_busy = 1;
-    net_rx_event( ctx, rr_xsk, rr_xsk->ring_rx.cached_cons );
-  } else {
-    ctx->rr_idx++;
-    ctx->rr_idx = fd_uint_if( ctx->rr_idx>=ctx->xsk_cnt, 0, ctx->rr_idx );
-  }
-}
-
-
 /* before_credit is called every loop iteration. */
 
 static void
@@ -1222,11 +1155,16 @@ before_credit( fd_net_ctx_t *      ctx,
   uint       rr_idx = ctx->rr_idx;
   fd_xsk_t * rr_xsk = &ctx->xsk[ rr_idx ];
 
-  if( FD_LIKELY( rr_xsk->prefbusy_poll_enabled ) ) {
-      before_credit_prefbusy( ctx, stem, charge_busy, rr_idx, rr_xsk );
+  net_tx_periodic_wakeup( ctx, rr_idx, fd_tickcount(), charge_busy );
+
+  /* Fire RX event if we have RX desc avail */
+  if( !fd_xdp_ring_empty( &rr_xsk->ring_rx, FD_XDP_RING_ROLE_CONS ) ) {
+    *charge_busy = 1;
+    net_rx_event( ctx, rr_xsk, rr_xsk->ring_rx.cached_cons );
   } else {
-      /* fallback polling mode for systems using a linux version < v5.11 */
-      before_credit_softirq( ctx, stem, charge_busy, rr_idx, rr_xsk );
+    net_rx_wakeup( ctx, rr_xsk, charge_busy );
+    ctx->rr_idx++;
+    ctx->rr_idx = fd_uint_if( ctx->rr_idx>=ctx->xsk_cnt, 0, ctx->rr_idx );
   }
 
   /* Fire comp event if we have comp desc avail */
@@ -1357,7 +1295,7 @@ privileged_init( fd_topo_t *      topo,
        (e.g. 5.14.0-503.23.1.el9_5 with i40e) */
     .bind_flags = tile->xdp.zero_copy ? XDP_ZEROCOPY : XDP_COPY,
 
-    .poll_mode               = tile->xdp.poll_mode,
+    .poll_mode               = &tile->xdp.poll_mode,
     .busy_poll_usecs         = tile->xdp.busy_poll_usecs,
     .gro_flush_timeout_nanos = tile->xdp.gro_flush_timeout_nanos,
 

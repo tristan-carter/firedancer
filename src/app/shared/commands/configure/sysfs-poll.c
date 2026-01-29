@@ -13,23 +13,27 @@
 #include <unistd.h> /* access */
 #include <linux/capability.h>
 
-#define VERY_HIGH_VAL 1000000000U
+#define VERY_HIGH_VAL 1000000U
 
 static char const setting_napi_defer_hard_irqs[] = "napi_defer_hard_irqs";
 
 static char const setting_gro_flush_timeout[] = "gro_flush_timeout";
 
-static char const setting_irq_suspend_timeout[] = "irq_suspend_timeout";
-
 static int
 enabled( config_t const * config ) {
-    return !strcmp( config->net.xdp.poll_mode, "pref_busy" );
+    /* TODO: MUST FINISH, if netdev-genl is available then return
+       with this setup disabled since netdev-genl makes system
+       wide setup redundant. */
+    if( 0 ) return 0;
+
+    FD_LOG_NOTICE(( "Kernel doesn't have netdev available so switching to non-netdev based prefbusy configuration." ));
+    return !strcmp( config->net.xdp.poll_mode, "prefbusy" );
 }
 
 static void
 init_perm ( fd_cap_chk_t   * chk,
             config_t const * config FD_PARAM_UNUSED ) {
-    fd_cap_chk_cap( chk, NAME, CAP_NET_ADMIN, "configure preferred busy polling via `/sys/class/net/*/{napi_defer_hard_irqs, gro_flush_timeout, irq_suspend_timeout}`" );
+    fd_cap_chk_cap( chk, NAME, CAP_NET_ADMIN, "configure preferred busy polling via `/sys/class/net/*/{napi_defer_hard_irqs, gro_flush_timeout}`" );
 }
 
 static void
@@ -45,8 +49,7 @@ sysfs_net_set( char const * device,
 static void
 init( config_t const * config ) {
     sysfs_net_set( config->net.interface, setting_napi_defer_hard_irqs, VERY_HIGH_VAL );
-    sysfs_net_set( config->net.interface, setting_gro_flush_timeout,    VERY_HIGH_VAL );
-    sysfs_net_set( config->net.interface, setting_irq_suspend_timeout,  VERY_HIGH_VAL );
+    sysfs_net_set( config->net.interface, setting_gro_flush_timeout,    config->net.xdp.gro_flush_timeout_nanos );
 }
 
 static int
@@ -54,7 +57,6 @@ fini( config_t const * config,
       int              pre_init FD_PARAM_UNUSED ) {
     sysfs_net_set( config->net.interface, setting_napi_defer_hard_irqs, 0U );
     sysfs_net_set( config->net.interface, setting_gro_flush_timeout,    0U );
-    sysfs_net_set( config->net.interface, setting_irq_suspend_timeout,  0U );
     return 1;
 }
 
@@ -64,26 +66,15 @@ check( config_t const * config,
     char path[ PATH_MAX ];
     uint value;
     fd_cstr_printf_check( path, PATH_MAX, NULL, "/sys/class/net/%s/%s", config->net.interface, setting_napi_defer_hard_irqs );
-    if( fd_file_util_read_uint( path, &value ) || value != VERY_HIGH_VAL ) {
+    if( fd_file_util_read_uint( path, &value ) || value < VERY_HIGH_VAL ) {
         NOT_CONFIGURED("Setting napi_defer_hard_irqs failed.");
     }
 
     fd_cstr_printf_check( path, PATH_MAX, NULL, "/sys/class/net/%s/%s", config->net.interface, setting_gro_flush_timeout );
-    if( fd_file_util_read_uint( path, &value ) || value != VERY_HIGH_VAL ) {
+    if( fd_file_util_read_uint( path, &value ) || value != config->net.xdp.gro_flush_timeout_nanos ) {
         NOT_CONFIGURED("Setting gro_flush_timeout failed.");
     }
     
-    /* irq_suspend_timeout was released in Linux 6.13, therefore due to
-       how new irq_suspend_timeout is many validators won't have it as
-       an available system configuration. */
-    fd_cstr_printf_check( path, PATH_MAX, NULL, "/sys/class/net/%s/%s", config->net.interface, setting_irq_suspend_timeout );
-
-    if( access( path, F_OK ) != -1 ) {
-        if( fd_file_util_read_uint( path, &value ) || value != VERY_HIGH_VAL ) {
-            NOT_CONFIGURED("Setting irq_suspend_timeout failed.");
-        }
-    }
-
     CONFIGURE_OK();
 }
 

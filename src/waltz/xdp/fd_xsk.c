@@ -4,6 +4,9 @@
 
 #define _GNU_SOURCE /* MADV_DONTDUMP */
 
+/* 
+#define EPIOCSPARAMS _IOW('E', 0x02, fd_epoll_params_t)
+
 #include <errno.h>
 #include <stdio.h> /* snprintf */
 #include <unistd.h>
@@ -11,11 +14,17 @@
 #include <sys/types.h>
 #include <sys/socket.h> /* sendto */
 #include <sys/syscall.h> /* SYS_mlock */
-
+#include <sys/epoll.h> /* (X) */
+#include <sys.ioctl.h> /* ioctl, EPIOCSPARAMS (X) */
+#include <fcntl.h>
 #include "../../util/log/fd_log.h"
 #include "fd_xsk.h"
 
 /* Support for older kernels */
+
+#ifndef EPIOCSPARAMS
+#define EPIOCSPARAMS _IOW('E', 0x02, fd_epoll_params_t)
+#endif
 
 #ifndef SO_BUSY_POLL
 #define SO_BUSY_POLL 46
@@ -148,6 +157,8 @@ fd_xsk_fini( fd_xsk_t * xsk ) {
     xsk->xsk_fd = -1;
   }
 
+  /* Release epoll_event struct  */
+
   return xsk;
 }
 
@@ -205,6 +216,114 @@ fd_xsk_setup_umem( fd_xsk_t *              xsk,
   return 0;
 }
 
+/* fd_xsk_setup_napi: Set irq-suspend-timeout, napi-defer-hard-irqs,
+   gro-flush-timeout for the socket's associated napi queue using
+   the netdev-genl linux api. */
+
+static int
+fd_xsk_setup_napi( fd_xsk_t *              xsk,
+                   fd_xsk_params_t const * params ) {
+    /* TODO: Finish */
+    return 0;
+}
+
+/* fd_xsk_setup_poll: Setup preferred busy polling if the user has set that to be
+   their preferred polling method */
+
+static void
+fd_xsk_setup_poll( fd_xsk_t *              xsk,
+                   fd_xsk_params_t const * params ) {
+    xsk->prefbusy_poll_enabled = 0;
+    if( 0!=strcmp( params->poll_mode, "prefbusy" ) ) return;
+
+    /* Configure socket options for preferred busy polling */
+
+    int prefbusy_poll = 1;
+    if( FD_UNLIKELY( 0!=setsockopt( xsk->xsk_fd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &prefbusy_poll, sizeof(int) ) ) ) {
+        int err = errno;
+        FD_LOG_WARNING(( "setsockopt(xsk_fd,SOL_SOCKET,SO_PREFER_BUSY_POLL,1) failed (%i-%s)", err, fd_io_strerror( err ) ));
+        if( err==EINVAL ) {
+            FD_LOG_WARNING(( "Hint: Does your kernel support preferred busy polling? SO_PREFER_BUSY_POLL is available since Linux 5.11" ));
+        }
+        return;
+    }
+
+    if( FD_UNLIKELY( 0!=setsockopt( xsk->xsk_fd, SOL_SOCKET, SO_BUSY_POLL, &params->busy_poll_usecs, sizeof(uint) ) ) ) {
+      FD_LOG_WARNING(( "setsockopt(xsk_fd,SOL_SOCKET,SO_BUSY_POLL,%u) failed (%i-%s)",
+                       params->busy_poll_usecs, errno, fd_io_strerror( errno ) ));
+      return;
+    }
+
+    uint busy_poll_budget = (uint)fd_ulong_min( fd_ulong_min( params->fr_depth, params->rx_depth ), 
+                                                fd_ulong_min( params->tx_depth, params->cr_depth ) );
+    if( FD_UNLIKELY( 0!=setsockopt( xsk->xsk_fd, SOL_SOCKET, SO_BUSY_POLL_BUDGET, &busy_poll_budget, sizeof(uint) ) ) ) {
+      FD_LOG_WARNING(( "setsockopt(xsk_fd,SOL_SOCKET,SO_BUSY_POLL_BUDGET,%u) failed (%i-%s)",
+                       busy_poll_budget, errno, fd_io_strerror( errno ) ));
+      return;
+    }
+
+    /* Set socket non blocking */
+
+    int sk_flags = fcntl( xsk->xsk_fd, F_GETFL, 0 );
+    if( FD_UNLIKELY( sk_flags == -1 ) ) {
+        FD_LOG_WARNING(( "fcntl(xsk->xsf_fd, F_GETFL, 0) failed (%i-%s)",
+                         errno, fd_io_strerror( errno ) ));
+        return;
+    }
+    if( FD_UNLIKELY( fcntl( xsk->xsk_fd, F_SETFL, sk_flags | O_NONBLOCK ) ) == -1 ) {
+        FD_LOG_WARNING(( "fcntl(xsk->xsk_fd, F_SETFL, sk_flags | O_NONBLOCK) failed (%i-%s)",
+                          errno, fd_io_strerror( errno ) ));
+        return;
+    }
+
+    /* Create epoll instance */
+
+    xsk->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+
+    if( FD_UNLIKELY( xsk->epoll_fd < 0 ) ) {
+        FD_LOG_WARNING(( "epoll_create1(EPOLL_CLOEXEC) failed (%i-%s)",
+                         errno, fd_io_strerror( errno ) ));
+        return;
+    }
+
+    /* Configure epoll instance event settings for edge triggered mode */
+
+    fd_epoll_event_t event_param; /* Note kernel makes its own copy of this param */
+    event_param.events   = EPOLLIN | EPOLLET;
+    event_param.data.ptr = NULL; /* NULL to mean the listening socket */
+    if( FD_UNLIKELY( 0!=epoll_ctl( xsk->epoll_fd, EPOLL_CTL_ADD, xsk->xsk_fd, &event_param ) ) ) {
+        FD_LOG_WARNING(( "epoll_ctl(xsk->epoll_fd, EPOLL_CTL_ADD, xsk->xsk_fd, &event_param) failed (%i-%s)",
+                         errno, fd_io_strerror( errno ) ));
+        close( xsk->epoll_fd );
+        return;
+    }
+
+    /* Configure epoll instance parameters */
+
+    fd_epoll_params_t epoll_params;
+    epoll_params.busy_poll_usecs  = params->busy_poll_usecs;
+    epoll_params.busy_poll_budget = (ushort)busy_poll_budget;
+    epoll_params.prefer_busy_poll = 1U;
+    if( FD_UNLIKELY( 0!=ioctl( xsk->epoll_fd, EPIOCSPARAMS, &epoll_params ) ) ) {
+        FD_LOG_WARNING(( "ioctl(xsk->epoll_fd, EPIOCSPARAMS, &epoll_params) failed (%i-%s)",
+                         errno, fd_io_strerror( errno ) ));
+        close( xsk->epoll_fd );
+        return;
+    }
+
+    /* Configure napi with netdev if netdev is available (checked by sysfs-poll.c) and the user
+       has netdev based configuration for preferred busy polling enabled */
+
+    if( FD_UNLIKELY( 0!=fd_xsk_setup_napi( xsk, params ) ) ) {
+        FD_LOG_WARNING(( "fd_xsk_setup_napi(xsk) failed" ));
+        close( xsk->epoll_fd );
+        return;
+    }
+
+    /* Successfully finished setting up prefbusy polling */
+    xsk->prefbusy_poll_enabled = 1U;
+}
+
 /* fd_xsk_init: Creates and configures an XSK socket object, and
    attaches to a preinstalled XDP program.  The various steps are
    implemented in fd_xsk_setup_{...}. */
@@ -256,36 +375,6 @@ fd_xsk_init( fd_xsk_t *              xsk,
   if( FD_UNLIKELY( 0!=fd_xsk_mmap_ring( &xsk->ring_tx, xsk->xsk_fd, XDP_PGOFF_TX_RING,              sizeof(struct xdp_desc), params->tx_depth, &xsk->offsets.tx ) ) ) goto fail;
   if( FD_UNLIKELY( 0!=fd_xsk_mmap_ring( &xsk->ring_fr, xsk->xsk_fd, XDP_UMEM_PGOFF_FILL_RING,       sizeof(ulong),           params->fr_depth, &xsk->offsets.fr ) ) ) goto fail;
   if( FD_UNLIKELY( 0!=fd_xsk_mmap_ring( &xsk->ring_cr, xsk->xsk_fd, XDP_UMEM_PGOFF_COMPLETION_RING, sizeof(ulong),           params->cr_depth, &xsk->offsets.cr ) ) ) goto fail;
-
-  /* If requested, enable preferred busy polling */
-
-    if( params->busy_poll_usecs ) {
-    int prefer_busy_poll = 1;
-    if( FD_UNLIKELY( 0!=setsockopt( xsk->xsk_fd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &prefer_busy_poll, sizeof(int) ) ) ) {
-      /* TODO: ADD FALLBACK TO SOFT_IRQ POLL MODE PRIOR TO MERGING PR */
-      int err = errno;
-      FD_LOG_WARNING(( "setsockopt(xsk_fd,SOL_SOCKET,SO_PREFER_BUSY_POLL,1) failed (%i-%s)", err, fd_io_strerror( err ) ));
-      if( err==EINVAL ) {
-        FD_LOG_WARNING(( "Hint: Does your kernel support preferred busy polling? SO_PREFER_BUSY_POLL is available since Linux 5.11" ));
-      }
-      return NULL;
-    }
-
-    if( FD_UNLIKELY( 0!=setsockopt( xsk->xsk_fd, SOL_SOCKET, SO_BUSY_POLL, &params->busy_poll_usecs, sizeof(uint) ) ) ) {
-      FD_LOG_WARNING(( "setsockopt(xsk_fd,SOL_SOCKET,SO_BUSY_POLL,%u) failed (%i-%s)",
-                       params->busy_poll_usecs, errno, fd_io_strerror( errno ) ));
-      return NULL;
-    }
-
-    uint busy_poll_budget = (uint)fd_ulong_min( fd_ulong_min( params->fr_depth, params->rx_depth ), fd_ulong_min( params->tx_depth, params->cr_depth ) );
-    if( FD_UNLIKELY( 0!=setsockopt( xsk->xsk_fd, SOL_SOCKET, SO_BUSY_POLL_BUDGET, &busy_poll_budget, sizeof(uint) ) ) ) {
-      FD_LOG_WARNING(( "setsockopt(xsk_fd,SOL_SOCKET,SO_BUSY_POLL_BUDGET,%u) failed (%i-%s)",
-                       busy_poll_budget, errno, fd_io_strerror( errno ) ));
-      return NULL;
-    }
-
-    strncpy( xsk->poll_mode, "pref_busy", sizeof(xsk->poll_mode) - 1 );
-  }
 
   /* Bind XSK to queue on network interface */
 
@@ -356,6 +445,10 @@ fd_xsk_init( fd_xsk_t *              xsk,
   } else {
     FD_LOG_DEBUG(( "Interface %u Queue %u has unknown NAPI ID", xsk->if_idx, xsk->if_queue_id ));
   }
+
+  /* If requested, enable preferred busy polling */
+
+  fd_xsk_setup_poll( xsk, params );
 
   return xsk;
 

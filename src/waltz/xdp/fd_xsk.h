@@ -187,7 +187,8 @@ fd_xdp_ring_full( fd_xdp_ring_t * ring ) {
   return ring->cached_prod - ring->cached_cons >= ring->depth;
 }
 
-/* fd_xsk_params_t: Memory layout parameters of XSK.
+/* fd_xsk_params_t: Memory layout parameters of XSK and
+   poll settings.
    Can be retrieved using fd_xsk_get_params() */
 
 struct fd_xsk_params {
@@ -217,14 +218,36 @@ struct fd_xsk_params {
   /* sockaddr_xdp.sxdp_flags additional params, e.g. XDP_ZEROCOPY */
   uint bind_flags;
 
+  char * poll_mode;
+
   /* busy_poll_usecs: max time elapsed polling during poll(2) call. */
   uint busy_poll_usecs;
+
+  /* TODO: Explain */
+  ulong gro_flush_timeout_nanos;
 
   /* whether the xsk memory should be included in core dumps */
   int core_dump;
 };
 
 typedef struct fd_xsk_params fd_xsk_params_t;
+
+#include <sys/epoll.h>
+
+typedef struct epoll_event fd_epoll_event_t;
+
+/* fd_epoll_params: Epoll parameters */ 
+ 
+struct fd_epoll_params {
+    uint   busy_poll_usecs;
+    ushort busy_poll_budget;
+    uchar  prefer_busy_poll;
+
+    /* pad the struct to a multiple of 64bits */
+    uchar __pad;
+};
+
+typedef struct fd_epoll_params fd_epoll_params_t;
 
 struct fd_xsk {
   /* Informational */
@@ -239,10 +262,15 @@ struct fd_xsk {
   /* AF_XDP socket file descriptor */
   int xsk_fd;
 
-  /* poll_mode: "pref_busy", "busy", or "softirq" */
-  char poll_mode[ 16 ];
+  /* Epoll instance file descriptor, note only used
+     in preferred busy poll mode not softirq mode */
+  int epoll_fd;
 
-  /* napi_id: ID of NAPI instance */
+  /* Whether preferred busy polling was sucessfully enabled
+     during socket setup */
+  int prefbusy_poll_enabled;
+
+  /* napi_id: ID of this specific NAPI instance */
   uint napi_id;
 
   /* ring_{rx,tx,fr,cr}: XSK ring descriptors */

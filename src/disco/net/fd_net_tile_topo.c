@@ -45,7 +45,8 @@ setup_xdp_tile( fd_topo_t *             topo,
   fd_cstr_ncpy( tile->xdp.xdp_mode, net_cfg->xdp.xdp_mode, sizeof(tile->xdp.xdp_mode) );
 
   fd_cstr_ncpy( tile->xdp.poll_mode, net_cfg->xdp.poll_mode, sizeof(tile->xdp.poll_mode) );
-  tile->xdp.sk_ll_usec_micros = net_cfg->xdp.sk_ll_usec_micros;
+  tile->xdp.busy_poll_usecs         = net_cfg->xdp.busy_poll_usecs;
+  tile->xdp.gro_flush_timeout_nanos = net_cfg->xdp.gro_flush_timeout_nanos;
 
   tile->xdp.net.umem_dcache_obj_id = umem_obj->id;
   tile->xdp.netdev_dbl_buf_obj_id  = netlink_tile->netlink.netdev_dbl_buf_obj_id;

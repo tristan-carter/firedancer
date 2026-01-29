@@ -959,11 +959,12 @@ dynamic_port_range = "8900-9000"
         xdp_zero_copy = false
 
         # TODO: improve explanations for these default values, will
-        # do before merging prefer busy polling PR. 10ms is currently
-        # just a magic number which seems resonable, will set properly prior
-        # to merging PR too.
-        poll_mode         = "pref_busy"
-        sk_ll_usec_micros = 10000
+        # do before merging prefer busy polling PR. These numbers are
+        # currently just magic numbers which seems resonable, will
+        # tune, justify and set properly prior to merging PR too.
+        poll_mode               = "prefbusy"
+        busy_poll_usecs         = 100
+        gro_flush_timeout_nanos = 100000
 
         # XDP uses metadata queues shared across the kernel and
         # userspace to relay events about incoming and outgoing packets.
